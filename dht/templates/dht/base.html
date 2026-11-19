@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}DHT11 Dashboard{% endblock %}</title>
+  {% block head %}{% endblock %}
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #f3f5f8; color: #1f2933;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 24px; }
+    .card {
+      background: #fff; border-radius: 14px; padding: 24px 28px;
+      max-width: 100%;
+      box-shadow: 0 2px 10px rgba(0,0,0,.06);
+      border-top: 5px solid var(--accent);
+    }
+    .temp { --accent: #e4572e; }
+    .hum  { --accent: #2e86de; }
+    .label { font-size: .85rem; text-transform: uppercase; letter-spacing: .06em; color: #6b7785; }
+    .value { font-size: 3rem; font-weight: 700; margin: 8px 0 4px; font-variant-numeric: tabular-nums; }
+    .unit  { font-size: 1.3rem; font-weight: 500; color: #6b7785; }
+    .btn {
+      display: inline-block; padding: 10px 18px; border-radius: 8px;
+      font: inherit; font-size: .95rem; font-weight: 500; text-decoration: none; cursor: pointer;
+      background: var(--accent, #1f2933); color: #fff; border: 2px solid var(--accent, #1f2933);
+    }
+    .btn:hover { filter: brightness(.92); }
+    .btn.outline { background: #fff; color: #1f2933; }
+    .since { font-size: .95rem; color: #6b7785; text-align: center; }
+    .since strong { color: #1f2933; }
+    .stale strong { color: #c0392b; }
+  </style>
+  {% block style %}{% endblock %}
+</head>
+<body>
+  {% block content %}{% endblock %}
+
+  <script>
+    // shared helpers: "saved X ago"
+    function formatAge(seconds) {
+      if (seconds < 60) return seconds + " s";
+      const m = Math.floor(seconds / 60), s = seconds % 60;
+      if (m < 60) return m + " min " + s + " s";
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + " h " + (m % 60) + " min";
+      const d = Math.floor(h / 24);
+      return d + " d " + (h % 24) + " h";
+    }
+    function renderAge(el, savedDate, staleAfterS) {
+      if (!savedDate) return;
+      const age = Math.max(0, Math.floor((Date.now() - savedDate.getTime()) / 1000));
+      el.innerHTML = "Last saved <strong>" + formatAge(age) + " ago</strong> · "
+                   + savedDate.toLocaleString();
+      el.classList.toggle("stale", age > staleAfterS);
+    }
+  </script>
+  {% block script %}{% endblock %}
+</body>
+</html>

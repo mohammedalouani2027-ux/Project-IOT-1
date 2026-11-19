@@ -1,0 +1,60 @@
+{% extends "dht/base.html" %}
+
+{% block style %}
+<style>
+  .cards { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%; }
+  .metric { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .metric .card { width: 260px; }
+  .since { margin-top: 28px; }
+</style>
+{% endblock %}
+
+{% block content %}
+  <h1>DHT11 Sensor</h1>
+
+  <div class="cards">
+    <div class="metric temp">
+      <div class="card">
+        <div class="label">Temperature</div>
+        <div class="value"><span id="temp">--</span><span class="unit"> °C</span></div>
+      </div>
+      <a class="btn" href="{% url 'graph' 'temp' %}">voir graphe temperature</a>
+    </div>
+
+    <div class="metric hum">
+      <div class="card">
+        <div class="label">Humidite</div>
+        <div class="value"><span id="hum">--</span><span class="unit"> %</span></div>
+      </div>
+      <a class="btn" href="{% url 'graph' 'hum' %}">voir graphe humidite</a>
+    </div>
+  </div>
+
+  <div class="since" id="since">en attente…</div>
+{% endblock %}
+
+{% block script %}
+<script>
+  const REFRESH_MS = 5000;      // how often to ask the server for new data
+  const STALE_AFTER_S = 60;     // highlight in red if the last reading is older than this
+  const sinceEl = document.getElementById("since");
+  let lastSaved = null;
+
+  async function loadLatest() {
+    try {
+      const d = (await (await fetch("/api/latest")).json()).data;
+      if (!d) { sinceEl.textContent = "No data saved yet."; return; }
+      document.getElementById("temp").textContent = d.temp != null ? d.temp.toFixed(1) : "--";
+      document.getElementById("hum").textContent  = d.hum  != null ? d.hum.toFixed(1)  : "--";
+      lastSaved = d.dt ? new Date(d.dt) : null;
+      renderAge(sinceEl, lastSaved, STALE_AFTER_S);
+    } catch (e) {
+      sinceEl.textContent = "Cannot reach the server.";
+    }
+  }
+
+  loadLatest();
+  setInterval(loadLatest, REFRESH_MS);
+  setInterval(() => renderAge(sinceEl, lastSaved, STALE_AFTER_S), 1000);
+</script>
+{% endblock %}

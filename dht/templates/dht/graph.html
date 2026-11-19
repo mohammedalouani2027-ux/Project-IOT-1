@@ -1,0 +1,255 @@
+{% extends "dht/base.html" %}
+
+{% block title %}Graphe {{ name|lower }}{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block style %}
+<style>
+  .page { width: 960px; max-width: 100%; }
+  .page .card { width: 100%; }
+  .top { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+
+  .period { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 20px;
+            padding-top: 16px; border-top: 1px solid #eef1f4; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field span { font-size: .8rem; color: #6b7785; }
+  .field input {
+    font: inherit; padding: 8px 10px; border: 1px solid #d5dbe1; border-radius: 8px;
+    background: #fff; color: #1f2933; cursor: pointer;
+  }
+  .field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .chip {
+    font: inherit; font-size: .85rem; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid #d5dbe1; background: #fff; color: #1f2933;
+  }
+  .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.small { padding: 8px 14px; }
+
+  .msg { font-size: .85rem; color: #c0392b; min-height: 1.2em; margin-top: 8px; }
+  .chart-box { position: relative; height: 360px; margin-top: 8px; }
+  .empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+           color: #6b7785; }
+  .actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+  .since { margin-top: 18px; }
+</style>
+{% endblock %}
+
+{% block content %}
+  <div class="page {{ metric }}">
+    <h1>Historique {{ name|lower }}</h1>
+
+    <div class="card">
+      <div class="top">
+        <div>
+          <div class="label">{{ name }} actuelle</div>
+          <div class="value"><span id="current">--</span><span class="unit"> {{ unit }}</span></div>
+        </div>
+        <div class="label" id="count"></div>
+      </div>
+
+      <form class="period" id="periodForm">
+        <label class="field"><span>Du</span><input type="date" id="start"></label>
+        <label class="field"><span>Au</span><input type="date" id="end"></label>
+        <button type="submit" class="btn small">Afficher</button>
+        <div class="presets">
+          <button type="button" class="chip active" data-preset="live">En direct</button>
+          <button type="button" class="chip" data-preset="1">24 h</button>
+          <button type="button" class="chip" data-preset="7">7 jours</button>
+          <button type="button" class="chip" data-preset="30">30 jours</button>
+        </div>
+      </form>
+      <div class="msg" id="msg"></div>
+
+      <div class="chart-box">
+        <canvas id="chart" aria-label="{{ name }} au cours du temps"></canvas>
+        <div class="empty" id="empty">Aucune mesure sur cette période.</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <a class="btn outline" href="{% url 'dashboard' %}">&larr; Retour</a>
+      <a class="btn" id="csvLink" href="{% url 'export_csv' metric %}">Télécharger CSV</a>
+    </div>
+
+    <div class="since" id="since"></div>
+  </div>
+{% endblock %}
+
+{% block script %}
+<script>
+  const FIELD = "{{ field }}";
+  const UNIT = "{{ unit }}";
+  const CSV_URL = "{% url 'export_csv' metric %}";
+  const COLOR = getComputedStyle(document.querySelector(".page")).getPropertyValue("--accent").trim();
+  const REFRESH_MS = 5000;
+  const STALE_AFTER_S = 60;
+  const LIVE_POINTS = 200;      // readings shown in "En direct" mode
+
+  const $ = id => document.getElementById(id);
+  const sinceEl = $("since");
+  let lastSaved = null;
+  let lastId = null;
+  let period = null;            // null = live mode, otherwise {start: Date, end: Date}
+
+  // ---------- date formatting ----------
+  const fmtDate = d => d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const fmtTime = d => d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const toInputValue = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+                            + "-" + String(d.getDate()).padStart(2, "0");
+  // "YYYY-MM-DD" from a date input -> local midnight
+  const fromInputValue = v => { const [y, m, d] = v.split("-").map(Number); return new Date(y, m - 1, d); };
+
+  // ---------- chart ----------
+  // x is a real timestamp (ms) so gaps between readings are drawn to scale
+  const chart = new Chart($("chart"), {
+    type: "line",
+    data: { datasets: [{
+      data: [],
+      borderColor: COLOR,
+      backgroundColor: COLOR + "1a",
+      borderWidth: 2,
+      fill: true,
+      tension: 0.25,
+      pointRadius: 0,
+      pointHoverRadius: 5,
+      pointHoverBackgroundColor: COLOR,
+      pointHoverBorderColor: "#fff",
+      pointHoverBorderWidth: 2,
+    }]},
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      parsing: false,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          displayColors: false,
+          callbacks: {
+            title: items => { const d = new Date(items[0].parsed.x); return fmtDate(d) + "  " + fmtTime(d); },
+            label: ctx => ctx.parsed.y.toFixed(1) + " " + UNIT,
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "linear",
+          grid: { display: false },
+          ticks: {
+            color: "#6b7785", maxTicksLimit: 7, maxRotation: 0,
+            callback: v => { const d = new Date(v); return [fmtDate(d), fmtTime(d).slice(0, 5)]; },
+          }
+        },
+        y: {
+          grid: { color: "#eef1f4" }, border: { display: false },
+          ticks: { color: "#6b7785", maxTicksLimit: 6, callback: v => v + " " + UNIT }
+        }
+      }
+    }
+  });
+
+  function drawRows(rows, total) {
+    const points = rows.filter(r => r[FIELD] != null && r.dt)
+                       .map(r => ({ x: new Date(r.dt).getTime(), y: r[FIELD] }));
+    chart.data.datasets[0].data = points;
+    // in period mode, show the whole chosen period on the x axis even if data is sparse
+    chart.options.scales.x.min = period ? period.start.getTime() : undefined;
+    chart.options.scales.x.max = period ? Math.min(period.end.getTime(), Date.now()) : undefined;
+    chart.update();
+    $("empty").style.display = points.length ? "none" : "flex";
+
+    let txt = rows.length + " mesures";
+    if (total > rows.length) txt = total + " mesures (" + rows.length + " affichées)";
+    $("count").textContent = period ? txt : "Les " + rows.length + " dernières mesures";
+  }
+
+  // ---------- data loading ----------
+  function periodQuery() {
+    if (!period) return "";
+    return "start=" + encodeURIComponent(period.start.toISOString())
+         + "&end=" + encodeURIComponent(period.end.toISOString());
+  }
+
+  async function loadChart() {
+    const url = "/api/history?" + (period ? periodQuery() : "n=" + LIVE_POINTS);
+    const res = await fetch(url);
+    if (!res.ok) { $("msg").textContent = "Période invalide."; return; }
+    const json = await res.json();
+    drawRows(json.data || [], json.total || 0);
+  }
+
+  async function refreshLive() {
+    try {
+      const d = (await (await fetch("/api/latest")).json()).data;
+      if (!d) { sinceEl.textContent = "Aucune donnée enregistrée."; return; }
+      $("current").textContent = d[FIELD] != null ? d[FIELD].toFixed(1) : "--";
+      lastSaved = d.dt ? new Date(d.dt) : null;
+      renderAge(sinceEl, lastSaved, STALE_AFTER_S);
+      // live mode: redraw when a new reading arrived
+      if (!period && d.id !== lastId) { lastId = d.id; await loadChart(); }
+    } catch (e) {
+      sinceEl.textContent = "Serveur injoignable.";
+    }
+  }
+
+  // ---------- period controls ----------
+  function setActiveChip(name) {
+    document.querySelectorAll(".chip").forEach(c => c.classList.toggle("active", c.dataset.preset === name));
+  }
+
+  function applyPeriod(start, end, chipName) {
+    $("msg").textContent = "";
+    if (start > end) { $("msg").textContent = "La date de début doit être avant la date de fin."; return; }
+    period = { start, end };
+    $("start").value = toInputValue(start);
+    $("end").value = toInputValue(end);
+    $("csvLink").href = CSV_URL + "?" + periodQuery();
+    setActiveChip(chipName);
+    loadChart();
+  }
+
+  function goLive() {
+    period = null;
+    lastId = null;
+    $("msg").textContent = "";
+    $("start").value = "";
+    $("end").value = "";
+    $("csvLink").href = CSV_URL;
+    setActiveChip("live");
+    refreshLive();
+  }
+
+  $("periodForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const s = $("start").value, en = $("end").value;
+    if (!s || !en) { $("msg").textContent = "Choisissez une date de début et de fin."; return; }
+    const start = fromInputValue(s);
+    const end = fromInputValue(en);
+    end.setHours(23, 59, 59, 999);          // include the whole end day
+    applyPeriod(start, end, null);
+  });
+
+  document.querySelectorAll(".chip").forEach(chip => chip.addEventListener("click", () => {
+    const p = chip.dataset.preset;
+    if (p === "live") return goLive();
+    const end = new Date();
+    const start = new Date(end.getTime() - Number(p) * 24 * 3600 * 1000);
+    applyPeriod(start, end, p);
+  }));
+
+  // the end calendar can't go before the start one, and neither can go into the future
+  const today = toInputValue(new Date());
+  $("start").max = today;
+  $("end").max = today;
+  $("start").addEventListener("change", () => { $("end").min = $("start").value; });
+
+  refreshLive();
+  setInterval(refreshLive, REFRESH_MS);
+  setInterval(() => renderAge(sinceEl, lastSaved, STALE_AFTER_S), 1000);
+</script>
+{% endblock %}
